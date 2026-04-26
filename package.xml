@@ -12,6 +12,9 @@
   <depend>rclcpp_components</depend>
   <depend>sensor_msgs</depend>
   <depend>message_filters</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <limits>
+#include <map>
 #include <stdexcept>
 
 #include "sensor_msgs/msg/point_field.hpp"
@@ -14,7 +14,8 @@ namespace sensor_preprocessing_suite
 SensorPreprocessingCore::SensorPreprocessingCore()
 : time_limit_(0.02),
   near_limit_(0.1),
-  far_limit_(200.0)
+  far_limit_(200.0),
+  box_size_(0.5)
 {
 }
 
@@ -27,6 +28,11 @@ void SensorPreprocessingCore::set_noise_limits(double near_limit, double far_lim
 {
   near_limit_ = near_limit;
   far_limit_ = far_limit;
+}
+
+void SensorPreprocessingCore::set_box_size(double box_size)
+{
+  box_size_ = box_size;
 }
 
 bool SensorPreprocessingCore::times_match(
@@ -81,6 +87,67 @@ sensor_msgs::msg::PointCloud2 SensorPreprocessingCore::clean_points(
   clean_points.row_step = clean_points.point_step * clean_points.width;
   clean_points.is_dense = true;
   return clean_points;
+}
+
+sensor_msgs::msg::Imu SensorPreprocessingCore::turn_imu_to_lidar(
+  const sensor_msgs::msg::Imu & imu_data,
+  const geometry_msgs::msg::Transform & frame_link) const
+{
+  sensor_msgs::msg::Imu clean_imu = imu_data;
+  const std::vector<double> turned_speed = turn_xyz(
+    imu_data.linear_acceleration.x,
+    imu_data.linear_acceleration.y,
+    imu_data.linear_acceleration.z,
+    frame_link);
+  clean_imu.linear_acceleration.x = turned_speed[0];
+  clean_imu.linear_acceleration.y = turned_speed[1];
+  clean_imu.linear_acceleration.z = turned_speed[2];
+  return clean_imu;
+}
+
+sensor_msgs::msg::PointCloud2 SensorPreprocessingCore::downsample_points(
+  const sensor_msgs::msg::PointCloud2 & laser_points) const
+{
+  if (box_size_ <= 0.0) {
+    throw std::runtime_error("box size must be greater than zero");
+  }
+
+  const point_place point_place_data = find_point_place(laser_points);
+  if (!point_place_data.ready) {
+    throw std::runtime_error("point cloud is missing x y z fields");
+  }
+
+  std::map<box_number, std::size_t> point_group;
+  const std::size_t point_count =
+    static_cast<std::size_t>(laser_points.width) * static_cast<std::size_t>(laser_points.height);
+
+  for (std::size_t point_number = 0; point_number < point_count; ++point_number) {
+    const simple_point one_point = read_point(laser_points, point_number, point_place_data);
+    const box_number one_box = find_box_number(one_point);
+    if (point_group.find(one_box) == point_group.end()) {
+      point_group.emplace(one_box, point_number);
+    }
+  }
+
+  sensor_msgs::msg::PointCloud2 downsampled_points = laser_points;
+  downsampled_points.data.clear();
+  downsampled_points.data.reserve(point_group.size() * laser_points.point_step);
+
+  for (const auto & box_and_point : point_group) {
+    const simple_point middle_point = find_box_middle(box_and_point.first);
+    write_point_with_new_place(
+      downsampled_points,
+      laser_points,
+      box_and_point.second,
+      point_place_data,
+      middle_point);
+  }
+
+  downsampled_points.width = static_cast<std::uint32_t>(point_group.size());
+  downsampled_points.height = 1u;
+  downsampled_points.row_step = downsampled_points.point_step * downsampled_points.width;
+  downsampled_points.is_dense = true;
+  return downsampled_points;
 }
 
 SensorPreprocessingCore::point_place SensorPreprocessingCore::find_point_place(
@@ -148,6 +215,33 @@ void SensorPreprocessingCore::write_point(
   clean_points.data.insert(clean_points.data.end(), start_data, end_data);
 }
 
+void SensorPreprocessingCore::write_point_with_new_place(
+  sensor_msgs::msg::PointCloud2 & clean_points,
+  const sensor_msgs::msg::PointCloud2 & laser_points,
+  std::size_t point_number,
+  const point_place & point_place_data,
+  const simple_point & new_place) const
+{
+  const std::size_t start_place = point_number * laser_points.point_step;
+  const auto start_data = laser_points.data.begin() + static_cast<std::ptrdiff_t>(start_place);
+  const auto end_data = start_data + static_cast<std::ptrdiff_t>(laser_points.point_step);
+  const std::size_t old_size = clean_points.data.size();
+  clean_points.data.insert(clean_points.data.end(), start_data, end_data);
+
+  std::memcpy(
+    &clean_points.data[old_size + point_place_data.x_place],
+    &new_place.x,
+    sizeof(float));
+  std::memcpy(
+    &clean_points.data[old_size + point_place_data.y_place],
+    &new_place.y,
+    sizeof(float));
+  std::memcpy(
+    &clean_points.data[old_size + point_place_data.z_place],
+    &new_place.z,
+    sizeof(float));
+}
+
 double SensorPreprocessingCore::read_time(
   const builtin_interfaces::msg::Time & stamp_time) const
 {
@@ -168,6 +262,54 @@ std::vector<double> SensorPreprocessingCore::gravity_pull_in_body(
   const double body_z = 9.81 * (1.0 - 2.0 * (x * x + y * y));
 
   return {body_x, body_y, body_z};
+}
+
+std::vector<double> SensorPreprocessingCore::turn_xyz(
+  double x,
+  double y,
+  double z,
+  const geometry_msgs::msg::Transform & frame_link) const
+{
+  const double turn_x = frame_link.rotation.x;
+  const double turn_y = frame_link.rotation.y;
+  const double turn_z = frame_link.rotation.z;
+  const double turn_w = frame_link.rotation.w;
+
+  const double row_one_one = 1.0 - 2.0 * (turn_y * turn_y + turn_z * turn_z);
+  const double row_one_two = 2.0 * (turn_x * turn_y - turn_z * turn_w);
+  const double row_one_three = 2.0 * (turn_x * turn_z + turn_y * turn_w);
+  const double row_two_one = 2.0 * (turn_x * turn_y + turn_z * turn_w);
+  const double row_two_two = 1.0 - 2.0 * (turn_x * turn_x + turn_z * turn_z);
+  const double row_two_three = 2.0 * (turn_y * turn_z - turn_x * turn_w);
+  const double row_three_one = 2.0 * (turn_x * turn_z - turn_y * turn_w);
+  const double row_three_two = 2.0 * (turn_y * turn_z + turn_x * turn_w);
+  const double row_three_three = 1.0 - 2.0 * (turn_x * turn_x + turn_y * turn_y);
+
+  const double new_x = row_one_one * x + row_one_two * y + row_one_three * z;
+  const double new_y = row_two_one * x + row_two_two * y + row_two_three * z;
+  const double new_z = row_three_one * x + row_three_two * y + row_three_three * z;
+
+  return {new_x, new_y, new_z};
+}
+
+SensorPreprocessingCore::box_number SensorPreprocessingCore::find_box_number(
+  const simple_point & one_point) const
+{
+  box_number one_box{};
+  one_box.x_box = static_cast<int>(std::floor(static_cast<double>(one_point.x) / box_size_));
+  one_box.y_box = static_cast<int>(std::floor(static_cast<double>(one_point.y) / box_size_));
+  one_box.z_box = static_cast<int>(std::floor(static_cast<double>(one_point.z) / box_size_));
+  return one_box;
+}
+
+SensorPreprocessingCore::simple_point SensorPreprocessingCore::find_box_middle(
+  const box_number & one_box) const
+{
+  simple_point middle_point{};
+  middle_point.x = static_cast<float>((static_cast<double>(one_box.x_box) + 0.5) * box_size_);
+  middle_point.y = static_cast<float>((static_cast<double>(one_box.y_box) + 0.5) * box_size_);
+  middle_point.z = static_cast<float>((static_cast<double>(one_box.z_box) + 0.5) * box_size_);
+  return middle_point;
 }
 
 bool SensorPreprocessingCore::point_is_clean(const simple_point & one_point) const

@@ -14,6 +14,9 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(message_filters REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 include_directories(include)
 
@@ -22,6 +25,7 @@ add_library(sensor_preprocessing_core SHARED
 )
 
 ament_target_dependencies(sensor_preprocessing_core
+  geometry_msgs
   sensor_msgs
 )
 
@@ -38,6 +42,9 @@ ament_target_dependencies(sensor_preprocessing_component
   rclcpp_components
   sensor_msgs
   message_filters
+  geometry_msgs
+  tf2
+  tf2_ros
 )
 
 rclcpp_components_register_nodes(sensor_preprocessing_component
