@@ -25,11 +25,21 @@ public:
   void set_box_size(double box_size);
   void set_floor_height(double floor_height);
   void set_scan_time(double scan_time);
+  void set_curve_settings(
+    std::size_t neighbor_size,
+    double edge_score_limit,
+    double flat_score_limit);
 
   struct split_cloud
   {
     sensor_msgs::msg::PointCloud2 ground_points;
     sensor_msgs::msg::PointCloud2 obstacle_points;
+  };
+
+  struct curve_cloud
+  {
+    sensor_msgs::msg::PointCloud2 edge_points;
+    sensor_msgs::msg::PointCloud2 flat_points;
   };
 
   bool times_match(
@@ -54,6 +64,9 @@ public:
     const sensor_msgs::msg::Imu & imu_data) const;
 
   split_cloud split_ground_points(
+    const sensor_msgs::msg::PointCloud2 & laser_points) const;
+
+  curve_cloud split_curve_points(
     const sensor_msgs::msg::PointCloud2 & laser_points) const;
 
 private:
@@ -133,6 +146,10 @@ private:
     const sensor_msgs::msg::Imu & imu_data,
     double point_fraction) const;
 
+  double find_curve_score(
+    const std::vector<simple_point> & point_list,
+    std::size_t point_number) const;
+
   bool point_is_clean(const simple_point & one_point) const;
 
   double time_limit_;
@@ -141,6 +158,9 @@ private:
   double box_size_;
   double floor_height_;
   double scan_time_;
+  std::size_t neighbor_size_;
+  double edge_score_limit_;
+  double flat_score_limit_;
 };
 
 }

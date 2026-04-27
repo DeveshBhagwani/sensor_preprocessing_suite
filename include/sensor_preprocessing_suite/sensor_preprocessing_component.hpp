@@ -39,6 +39,8 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr points_out_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_out_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obstacle_out_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr edge_out_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr flat_out_;
   message_filters::Subscriber<sensor_msgs::msg::Imu> imu_in_;
   message_filters::Subscriber<sensor_msgs::msg::PointCloud2> points_in_;
   using sync_rule = message_filters::sync_policies::ApproximateTime<

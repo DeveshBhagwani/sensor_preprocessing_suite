@@ -17,7 +17,10 @@ SensorPreprocessingCore::SensorPreprocessingCore()
   far_limit_(200.0),
   box_size_(0.5),
   floor_height_(0.0),
-  scan_time_(0.1)
+  scan_time_(0.1),
+  neighbor_size_(5),
+  edge_score_limit_(0.05),
+  flat_score_limit_(0.005)
 {
 }
 
@@ -45,6 +48,16 @@ void SensorPreprocessingCore::set_floor_height(double floor_height)
 void SensorPreprocessingCore::set_scan_time(double scan_time)
 {
   scan_time_ = scan_time;
+}
+
+void SensorPreprocessingCore::set_curve_settings(
+  std::size_t neighbor_size,
+  double edge_score_limit,
+  double flat_score_limit)
+{
+  neighbor_size_ = neighbor_size;
+  edge_score_limit_ = edge_score_limit;
+  flat_score_limit_ = flat_score_limit;
 }
 
 bool SensorPreprocessingCore::times_match(
@@ -262,6 +275,71 @@ SensorPreprocessingCore::split_cloud SensorPreprocessingCore::split_ground_point
   return cloud_split;
 }
 
+SensorPreprocessingCore::curve_cloud SensorPreprocessingCore::split_curve_points(
+  const sensor_msgs::msg::PointCloud2 & laser_points) const
+{
+  const point_place point_place_data = find_point_place(laser_points);
+  if (!point_place_data.ready) {
+    throw std::runtime_error("point cloud is missing x y z fields");
+  }
+
+  curve_cloud curve_split;
+  curve_split.edge_points = laser_points;
+  curve_split.flat_points = laser_points;
+  curve_split.edge_points.data.clear();
+  curve_split.flat_points.data.clear();
+  curve_split.edge_points.data.reserve(laser_points.data.size());
+  curve_split.flat_points.data.reserve(laser_points.data.size());
+
+  const std::size_t point_count =
+    static_cast<std::size_t>(laser_points.width) * static_cast<std::size_t>(laser_points.height);
+
+  if (neighbor_size_ == 0 || point_count == 0) {
+    curve_split.edge_points.width = 0u;
+    curve_split.edge_points.height = 1u;
+    curve_split.edge_points.row_step = 0u;
+    curve_split.edge_points.is_dense = true;
+    curve_split.flat_points.width = 0u;
+    curve_split.flat_points.height = 1u;
+    curve_split.flat_points.row_step = 0u;
+    curve_split.flat_points.is_dense = true;
+    return curve_split;
+  }
+
+  std::vector<simple_point> point_list;
+  point_list.reserve(point_count);
+  for (std::size_t point_number = 0; point_number < point_count; ++point_number) {
+    point_list.push_back(read_point(laser_points, point_number, point_place_data));
+  }
+
+  std::size_t edge_count = 0;
+  std::size_t flat_count = 0;
+  for (std::size_t point_number = 0; point_number < point_count; ++point_number) {
+    const double curve_score = find_curve_score(point_list, point_number);
+    if (curve_score >= edge_score_limit_) {
+      write_point(curve_split.edge_points, laser_points, point_number);
+      ++edge_count;
+    } else if (curve_score <= flat_score_limit_) {
+      write_point(curve_split.flat_points, laser_points, point_number);
+      ++flat_count;
+    }
+  }
+
+  curve_split.edge_points.width = static_cast<std::uint32_t>(edge_count);
+  curve_split.edge_points.height = 1u;
+  curve_split.edge_points.row_step =
+    curve_split.edge_points.point_step * curve_split.edge_points.width;
+  curve_split.edge_points.is_dense = true;
+
+  curve_split.flat_points.width = static_cast<std::uint32_t>(flat_count);
+  curve_split.flat_points.height = 1u;
+  curve_split.flat_points.row_step =
+    curve_split.flat_points.point_step * curve_split.flat_points.width;
+  curve_split.flat_points.is_dense = true;
+
+  return curve_split;
+}
+
 SensorPreprocessingCore::point_place SensorPreprocessingCore::find_point_place(
   const sensor_msgs::msg::PointCloud2 & laser_points) const
 {
@@ -456,6 +534,43 @@ SensorPreprocessingCore::simple_point SensorPreprocessingCore::turn_point_by_tur
   fixed_point.y = static_cast<float>(second_x * z_sin + second_y * z_cos);
   fixed_point.z = static_cast<float>(second_z);
   return fixed_point;
+}
+
+double SensorPreprocessingCore::find_curve_score(
+  const std::vector<simple_point> & point_list,
+  std::size_t point_number) const
+{
+  if (point_list.empty()) {
+    return 0.0;
+  }
+
+  if (point_number < neighbor_size_ || point_number + neighbor_size_ >= point_list.size()) {
+    return 0.0;
+  }
+
+  double x_sum = 0.0;
+  double y_sum = 0.0;
+  double z_sum = 0.0;
+
+  for (std::size_t neighbor_number = point_number - neighbor_size_;
+    neighbor_number <= point_number + neighbor_size_;
+    ++neighbor_number)
+  {
+    if (neighbor_number == point_number) {
+      continue;
+    }
+
+    x_sum += static_cast<double>(point_list[neighbor_number].x);
+    y_sum += static_cast<double>(point_list[neighbor_number].y);
+    z_sum += static_cast<double>(point_list[neighbor_number].z);
+  }
+
+  const double neighbor_count = static_cast<double>(neighbor_size_ * 2);
+  const double x_gap = x_sum / neighbor_count - static_cast<double>(point_list[point_number].x);
+  const double y_gap = y_sum / neighbor_count - static_cast<double>(point_list[point_number].y);
+  const double z_gap = z_sum / neighbor_count - static_cast<double>(point_list[point_number].z);
+
+  return x_gap * x_gap + y_gap * y_gap + z_gap * z_gap;
 }
 
 bool SensorPreprocessingCore::point_is_clean(const simple_point & one_point) const

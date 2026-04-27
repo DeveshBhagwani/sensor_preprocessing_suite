@@ -1,5 +1,6 @@
 #include "sensor_preprocessing_suite/sensor_preprocessing_component.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -34,6 +35,12 @@ SensorPreprocessingComponent::SensorPreprocessingComponent(const rclcpp::NodeOpt
   obstacle_out_ = create_publisher<sensor_msgs::msg::PointCloud2>(
     "points/obstacle",
     rclcpp::SensorDataQoS());
+  edge_out_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+    "points/edge",
+    rclcpp::SensorDataQoS());
+  flat_out_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+    "points/flat",
+    rclcpp::SensorDataQoS());
 
   sync_ = std::make_shared<message_filters::Synchronizer<sync_rule>>(sync_rule(20), imu_in_, points_in_);
   sync_->registerCallback(
@@ -64,10 +71,13 @@ void SensorPreprocessingComponent::synced_data(
     clean_points = core_.fix_twisted_points(clean_points, clean_imu);
     clean_points = core_.downsample_points(clean_points);
     const auto cloud_split = core_.split_ground_points(clean_points);
+    const auto curve_split = core_.split_curve_points(clean_points);
     imu_out_->publish(clean_imu);
     points_out_->publish(clean_points);
     ground_out_->publish(cloud_split.ground_points);
     obstacle_out_->publish(cloud_split.obstacle_points);
+    edge_out_->publish(curve_split.edge_points);
+    flat_out_->publish(curve_split.flat_points);
   } catch (const std::runtime_error & problem) {
     RCLCPP_WARN(get_logger(), "%s", problem.what());
   }
@@ -81,6 +91,9 @@ void SensorPreprocessingComponent::load_settings()
   const double box_size = declare_parameter<double>("box_size", 0.5);
   const double floor_height = declare_parameter<double>("floor_height", 0.0);
   const double scan_time = declare_parameter<double>("scan_time", 0.1);
+  const int neighbor_size = declare_parameter<int>("neighbor_size", 5);
+  const double edge_score_limit = declare_parameter<double>("edge_score_limit", 0.05);
+  const double flat_score_limit = declare_parameter<double>("flat_score_limit", 0.005);
   imu_frame_ = declare_parameter<std::string>("imu_frame", "imu_link");
   lidar_frame_ = declare_parameter<std::string>("lidar_frame", "lidar_link");
 
@@ -89,6 +102,10 @@ void SensorPreprocessingComponent::load_settings()
   core_.set_box_size(box_size);
   core_.set_floor_height(floor_height);
   core_.set_scan_time(scan_time);
+  core_.set_curve_settings(
+    static_cast<std::size_t>(std::max(neighbor_size, 0)),
+    edge_score_limit,
+    flat_score_limit);
 }
 
 bool SensorPreprocessingComponent::read_frame_link(
