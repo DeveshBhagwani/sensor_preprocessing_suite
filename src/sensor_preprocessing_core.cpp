@@ -15,7 +15,9 @@ SensorPreprocessingCore::SensorPreprocessingCore()
 : time_limit_(0.02),
   near_limit_(0.1),
   far_limit_(200.0),
-  box_size_(0.5)
+  box_size_(0.5),
+  floor_height_(0.0),
+  scan_time_(0.1)
 {
 }
 
@@ -33,6 +35,16 @@ void SensorPreprocessingCore::set_noise_limits(double near_limit, double far_lim
 void SensorPreprocessingCore::set_box_size(double box_size)
 {
   box_size_ = box_size;
+}
+
+void SensorPreprocessingCore::set_floor_height(double floor_height)
+{
+  floor_height_ = floor_height;
+}
+
+void SensorPreprocessingCore::set_scan_time(double scan_time)
+{
+  scan_time_ = scan_time;
 }
 
 bool SensorPreprocessingCore::times_match(
@@ -94,14 +106,22 @@ sensor_msgs::msg::Imu SensorPreprocessingCore::turn_imu_to_lidar(
   const geometry_msgs::msg::Transform & frame_link) const
 {
   sensor_msgs::msg::Imu clean_imu = imu_data;
-  const std::vector<double> turned_speed = turn_xyz(
+  const std::vector<double> turned_pull = turn_xyz(
     imu_data.linear_acceleration.x,
     imu_data.linear_acceleration.y,
     imu_data.linear_acceleration.z,
     frame_link);
-  clean_imu.linear_acceleration.x = turned_speed[0];
-  clean_imu.linear_acceleration.y = turned_speed[1];
-  clean_imu.linear_acceleration.z = turned_speed[2];
+  const std::vector<double> turned_speed = turn_xyz(
+    imu_data.angular_velocity.x,
+    imu_data.angular_velocity.y,
+    imu_data.angular_velocity.z,
+    frame_link);
+  clean_imu.linear_acceleration.x = turned_pull[0];
+  clean_imu.linear_acceleration.y = turned_pull[1];
+  clean_imu.linear_acceleration.z = turned_pull[2];
+  clean_imu.angular_velocity.x = turned_speed[0];
+  clean_imu.angular_velocity.y = turned_speed[1];
+  clean_imu.angular_velocity.z = turned_speed[2];
   return clean_imu;
 }
 
@@ -148,6 +168,98 @@ sensor_msgs::msg::PointCloud2 SensorPreprocessingCore::downsample_points(
   downsampled_points.row_step = downsampled_points.point_step * downsampled_points.width;
   downsampled_points.is_dense = true;
   return downsampled_points;
+}
+
+sensor_msgs::msg::PointCloud2 SensorPreprocessingCore::fix_twisted_points(
+  const sensor_msgs::msg::PointCloud2 & laser_points,
+  const sensor_msgs::msg::Imu & imu_data) const
+{
+  if (scan_time_ <= 0.0) {
+    throw std::runtime_error("scan time must be greater than zero");
+  }
+
+  const point_place point_place_data = find_point_place(laser_points);
+  if (!point_place_data.ready) {
+    throw std::runtime_error("point cloud is missing x y z fields");
+  }
+
+  sensor_msgs::msg::PointCloud2 straight_points = laser_points;
+  straight_points.data.clear();
+  straight_points.data.reserve(laser_points.data.size());
+
+  const std::size_t point_count =
+    static_cast<std::size_t>(laser_points.width) * static_cast<std::size_t>(laser_points.height);
+
+  for (std::size_t point_number = 0; point_number < point_count; ++point_number) {
+    const simple_point one_point = read_point(laser_points, point_number, point_place_data);
+    double point_fraction = 0.0;
+    if (point_count > 1) {
+      point_fraction =
+        static_cast<double>(point_number) / static_cast<double>(point_count - 1);
+    }
+
+    const simple_point fixed_point = turn_point_by_turn_speed(one_point, imu_data, point_fraction);
+    write_point_with_new_place(
+      straight_points,
+      laser_points,
+      point_number,
+      point_place_data,
+      fixed_point);
+  }
+
+  straight_points.width = laser_points.width;
+  straight_points.height = laser_points.height;
+  straight_points.row_step = straight_points.point_step * straight_points.width;
+  straight_points.is_dense = laser_points.is_dense;
+  return straight_points;
+}
+
+SensorPreprocessingCore::split_cloud SensorPreprocessingCore::split_ground_points(
+  const sensor_msgs::msg::PointCloud2 & laser_points) const
+{
+  const point_place point_place_data = find_point_place(laser_points);
+  if (!point_place_data.ready) {
+    throw std::runtime_error("point cloud is missing x y z fields");
+  }
+
+  split_cloud cloud_split;
+  cloud_split.ground_points = laser_points;
+  cloud_split.obstacle_points = laser_points;
+  cloud_split.ground_points.data.clear();
+  cloud_split.obstacle_points.data.clear();
+  cloud_split.ground_points.data.reserve(laser_points.data.size());
+  cloud_split.obstacle_points.data.reserve(laser_points.data.size());
+
+  const std::size_t point_count =
+    static_cast<std::size_t>(laser_points.width) * static_cast<std::size_t>(laser_points.height);
+
+  std::size_t ground_count = 0;
+  std::size_t obstacle_count = 0;
+
+  for (std::size_t point_number = 0; point_number < point_count; ++point_number) {
+    const simple_point one_point = read_point(laser_points, point_number, point_place_data);
+    if (one_point.z <= floor_height_) {
+      write_point(cloud_split.ground_points, laser_points, point_number);
+      ++ground_count;
+    } else {
+      write_point(cloud_split.obstacle_points, laser_points, point_number);
+      ++obstacle_count;
+    }
+  }
+
+  cloud_split.ground_points.width = static_cast<std::uint32_t>(ground_count);
+  cloud_split.ground_points.height = 1u;
+  cloud_split.ground_points.row_step =
+    cloud_split.ground_points.point_step * cloud_split.ground_points.width;
+  cloud_split.ground_points.is_dense = true;
+
+  cloud_split.obstacle_points.width = static_cast<std::uint32_t>(obstacle_count);
+  cloud_split.obstacle_points.height = 1u;
+  cloud_split.obstacle_points.row_step =
+    cloud_split.obstacle_points.point_step * cloud_split.obstacle_points.width;
+  cloud_split.obstacle_points.is_dense = true;
+
+  return cloud_split;
 }
 
 SensorPreprocessingCore::point_place SensorPreprocessingCore::find_point_place(
@@ -310,6 +422,40 @@ SensorPreprocessingCore::simple_point SensorPreprocessingCore::find_box_middle(
   middle_point.y = static_cast<float>((static_cast<double>(one_box.y_box) + 0.5) * box_size_);
   middle_point.z = static_cast<float>((static_cast<double>(one_box.z_box) + 0.5) * box_size_);
   return middle_point;
+}
+
+SensorPreprocessingCore::simple_point SensorPreprocessingCore::turn_point_by_turn_speed(
+  const simple_point & one_point,
+  const sensor_msgs::msg::Imu & imu_data,
+  double point_fraction) const
+{
+  const double turn_time = point_fraction * scan_time_;
+  const double x_turn = -imu_data.angular_velocity.x * turn_time;
+  const double y_turn = -imu_data.angular_velocity.y * turn_time;
+  const double z_turn = -imu_data.angular_velocity.z * turn_time;
+
+  const double x_sin = std::sin(x_turn);
+  const double x_cos = std::cos(x_turn);
+  const double y_sin = std::sin(y_turn);
+  const double y_cos = std::cos(y_turn);
+  const double z_sin = std::sin(z_turn);
+  const double z_cos = std::cos(z_turn);
+
+  const double first_x = static_cast<double>(one_point.x);
+  const double first_y =
+    static_cast<double>(one_point.y) * x_cos - static_cast<double>(one_point.z) * x_sin;
+  const double first_z =
+    static_cast<double>(one_point.y) * x_sin + static_cast<double>(one_point.z) * x_cos;
+
+  const double second_x = first_x * y_cos + first_z * y_sin;
+  const double second_y = first_y;
+  const double second_z = -first_x * y_sin + first_z * y_cos;
+
+  simple_point fixed_point{};
+  fixed_point.x = static_cast<float>(second_x * z_cos - second_y * z_sin);
+  fixed_point.y = static_cast<float>(second_x * z_sin + second_y * z_cos);
+  fixed_point.z = static_cast<float>(second_z);
+  return fixed_point;
 }
 
 bool SensorPreprocessingCore::point_is_clean(const simple_point & one_point) const

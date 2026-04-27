@@ -23,6 +23,14 @@ public:
   void set_time_limit(double time_limit);
   void set_noise_limits(double near_limit, double far_limit);
   void set_box_size(double box_size);
+  void set_floor_height(double floor_height);
+  void set_scan_time(double scan_time);
+
+  struct split_cloud
+  {
+    sensor_msgs::msg::PointCloud2 ground_points;
+    sensor_msgs::msg::PointCloud2 obstacle_points;
+  };
 
   bool times_match(
     const sensor_msgs::msg::Imu & imu_data,
@@ -39,6 +47,13 @@ public:
     const geometry_msgs::msg::Transform & frame_link) const;
 
   sensor_msgs::msg::PointCloud2 downsample_points(
+    const sensor_msgs::msg::PointCloud2 & laser_points) const;
+
+  sensor_msgs::msg::PointCloud2 fix_twisted_points(
+    const sensor_msgs::msg::PointCloud2 & laser_points,
+    const sensor_msgs::msg::Imu & imu_data) const;
+
+  split_cloud split_ground_points(
     const sensor_msgs::msg::PointCloud2 & laser_points) const;
 
 private:
@@ -113,12 +128,19 @@ private:
 
   simple_point find_box_middle(const box_number & one_box) const;
 
+  simple_point turn_point_by_turn_speed(
+    const simple_point & one_point,
+    const sensor_msgs::msg::Imu & imu_data,
+    double point_fraction) const;
+
   bool point_is_clean(const simple_point & one_point) const;
 
   double time_limit_;
   double near_limit_;
   double far_limit_;
   double box_size_;
+  double floor_height_;
+  double scan_time_;
 };
 
 }

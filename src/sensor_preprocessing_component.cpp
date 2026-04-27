@@ -28,6 +28,12 @@ SensorPreprocessingComponent::SensorPreprocessingComponent(const rclcpp::NodeOpt
   points_out_ = create_publisher<sensor_msgs::msg::PointCloud2>(
     "points/out",
     rclcpp::SensorDataQoS());
+  ground_out_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+    "points/ground",
+    rclcpp::SensorDataQoS());
+  obstacle_out_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+    "points/obstacle",
+    rclcpp::SensorDataQoS());
 
   sync_ = std::make_shared<message_filters::Synchronizer<sync_rule>>(sync_rule(20), imu_in_, points_in_);
   sync_->registerCallback(
@@ -55,9 +61,13 @@ void SensorPreprocessingComponent::synced_data(
 
     clean_imu = core_.turn_imu_to_lidar(clean_imu, frame_link);
     sensor_msgs::msg::PointCloud2 clean_points = core_.clean_points(*laser_points);
+    clean_points = core_.fix_twisted_points(clean_points, clean_imu);
     clean_points = core_.downsample_points(clean_points);
+    const auto cloud_split = core_.split_ground_points(clean_points);
     imu_out_->publish(clean_imu);
     points_out_->publish(clean_points);
+    ground_out_->publish(cloud_split.ground_points);
+    obstacle_out_->publish(cloud_split.obstacle_points);
   } catch (const std::runtime_error & problem) {
     RCLCPP_WARN(get_logger(), "%s", problem.what());
   }
@@ -69,12 +79,16 @@ void SensorPreprocessingComponent::load_settings()
   const double near_limit = declare_parameter<double>("near_limit", 0.1);
   const double far_limit = declare_parameter<double>("far_limit", 200.0);
   const double box_size = declare_parameter<double>("box_size", 0.5);
+  const double floor_height = declare_parameter<double>("floor_height", 0.0);
+  const double scan_time = declare_parameter<double>("scan_time", 0.1);
   imu_frame_ = declare_parameter<std::string>("imu_frame", "imu_link");
   lidar_frame_ = declare_parameter<std::string>("lidar_frame", "lidar_link");
 
   core_.set_time_limit(time_limit);
   core_.set_noise_limits(near_limit, far_limit);
   core_.set_box_size(box_size);
+  core_.set_floor_height(floor_height);
+  core_.set_scan_time(scan_time);
 }
 
 bool SensorPreprocessingComponent::read_frame_link(
