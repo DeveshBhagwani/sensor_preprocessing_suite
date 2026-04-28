@@ -1,9 +1,10 @@
 #include "sensor_preprocessing_suite/sensor_preprocessing_core.hpp"
 
+#include <cfloat>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <map>
+#include <deque>
 #include <stdexcept>
 
 #include "sensor_msgs/msg/point_field.hpp"
@@ -20,7 +21,8 @@ SensorPreprocessingCore::SensorPreprocessingCore()
   scan_time_(0.1),
   neighbor_size_(5),
   edge_score_limit_(0.05),
-  flat_score_limit_(0.005)
+  flat_score_limit_(0.005),
+  group_gap_(0.5)
 {
 }
 
@@ -58,6 +60,11 @@ void SensorPreprocessingCore::set_curve_settings(
   neighbor_size_ = neighbor_size;
   edge_score_limit_ = edge_score_limit;
   flat_score_limit_ = flat_score_limit;
+}
+
+void SensorPreprocessingCore::set_group_gap(double group_gap)
+{
+  group_gap_ = group_gap;
 }
 
 bool SensorPreprocessingCore::times_match(
@@ -340,6 +347,88 @@ SensorPreprocessingCore::curve_cloud SensorPreprocessingCore::split_curve_points
   return curve_split;
 }
 
+vision_msgs::msg::BoundingBox3DArray SensorPreprocessingCore::find_group_boxes(
+  const sensor_msgs::msg::PointCloud2 & laser_points) const
+{
+  if (group_gap_ <= 0.0) {
+    throw std::runtime_error("group gap must be greater than zero");
+  }
+
+  const point_place point_place_data = find_point_place(laser_points);
+  if (!point_place_data.ready) {
+    throw std::runtime_error("point cloud is missing x y z fields");
+  }
+
+  const std::size_t point_count =
+    static_cast<std::size_t>(laser_points.width) * static_cast<std::size_t>(laser_points.height);
+
+  std::vector<simple_point> point_list;
+  point_list.reserve(point_count);
+  for (std::size_t point_number = 0; point_number < point_count; ++point_number) {
+    point_list.push_back(read_point(laser_points, point_number, point_place_data));
+  }
+
+  std::vector<bool> used_points(point_count, false);
+  vision_msgs::msg::BoundingBox3DArray group_boxes;
+  group_boxes.header = laser_points.header;
+
+  for (std::size_t start_number = 0; start_number < point_count; ++start_number) {
+    if (used_points[start_number]) {
+      continue;
+    }
+
+    std::deque<std::size_t> open_points;
+    open_points.push_back(start_number);
+    used_points[start_number] = true;
+
+    double left_x = DBL_MAX;
+    double right_x = -DBL_MAX;
+    double left_y = DBL_MAX;
+    double right_y = -DBL_MAX;
+    double low_z = DBL_MAX;
+    double high_z = -DBL_MAX;
+
+    while (!open_points.empty()) {
+      const std::size_t one_number = open_points.front();
+      open_points.pop_front();
+      const simple_point & one_point = point_list[one_number];
+
+      left_x = std::min(left_x, static_cast<double>(one_point.x));
+      right_x = std::max(right_x, static_cast<double>(one_point.x));
+      left_y = std::min(left_y, static_cast<double>(one_point.y));
+      right_y = std::max(right_y, static_cast<double>(one_point.y));
+      low_z = std::min(low_z, static_cast<double>(one_point.z));
+      high_z = std::max(high_z, static_cast<double>(one_point.z));
+
+      for (std::size_t check_number = 0; check_number < point_count; ++check_number) {
+        if (used_points[check_number]) {
+          continue;
+        }
+
+        if (point_gap(one_point, point_list[check_number]) <= group_gap_) {
+          used_points[check_number] = true;
+          open_points.push_back(check_number);
+        }
+      }
+    }
+
+    vision_msgs::msg::BoundingBox3D one_box;
+    one_box.center.position.x = (left_x + right_x) * 0.5;
+    one_box.center.position.y = (left_y + right_y) * 0.5;
+    one_box.center.position.z = (low_z + high_z) * 0.5;
+    one_box.center.orientation.x = 0.0;
+    one_box.center.orientation.y = 0.0;
+    one_box.center.orientation.z = 0.0;
+    one_box.center.orientation.w = 1.0;
+    one_box.size.x = right_x - left_x;
+    one_box.size.y = right_y - left_y;
+    one_box.size.z = high_z - low_z;
+    group_boxes.boxes.push_back(one_box);
+  }
+
+  return group_boxes;
+}
+
 SensorPreprocessingCore::point_place SensorPreprocessingCore::find_point_place(
   const sensor_msgs::msg::PointCloud2 & laser_points) const
 {
@@ -571,6 +660,16 @@ double SensorPreprocessingCore::find_curve_score(
   const double z_gap = z_sum / neighbor_count - static_cast<double>(point_list[point_number].z);
 
   return x_gap * x_gap + y_gap * y_gap + z_gap * z_gap;
+}
+
+double SensorPreprocessingCore::point_gap(
+  const simple_point & first_point,
+  const simple_point & second_point) const
+{
+  const double x_gap = static_cast<double>(first_point.x) - static_cast<double>(second_point.x);
+  const double y_gap = static_cast<double>(first_point.y) - static_cast<double>(second_point.y);
+  const double z_gap = static_cast<double>(first_point.z) - static_cast<double>(second_point.z);
+  return std::sqrt(x_gap * x_gap + y_gap * y_gap + z_gap * z_gap);
 }
 
 bool SensorPreprocessingCore::point_is_clean(const simple_point & one_point) const

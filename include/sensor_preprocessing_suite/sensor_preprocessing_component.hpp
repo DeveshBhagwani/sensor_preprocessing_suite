@@ -13,6 +13,7 @@
 #include "sensor_preprocessing_suite/sensor_preprocessing_core.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
+#include "vision_msgs/msg/bounding_box3_d_array.hpp"
 
 namespace sensor_preprocessing_suite
 {
@@ -41,6 +42,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obstacle_out_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr edge_out_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr flat_out_;
+  rclcpp::Publisher<vision_msgs::msg::BoundingBox3DArray>::SharedPtr group_out_;
   message_filters::Subscriber<sensor_msgs::msg::Imu> imu_in_;
   message_filters::Subscriber<sensor_msgs::msg::PointCloud2> points_in_;
   using sync_rule = message_filters::sync_policies::ApproximateTime<

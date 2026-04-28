@@ -41,6 +41,9 @@ SensorPreprocessingComponent::SensorPreprocessingComponent(const rclcpp::NodeOpt
   flat_out_ = create_publisher<sensor_msgs::msg::PointCloud2>(
     "points/flat",
     rclcpp::SensorDataQoS());
+  group_out_ = create_publisher<vision_msgs::msg::BoundingBox3DArray>(
+    "points/group_boxes",
+    rclcpp::SensorDataQoS());
 
   sync_ = std::make_shared<message_filters::Synchronizer<sync_rule>>(sync_rule(20), imu_in_, points_in_);
   sync_->registerCallback(
@@ -72,12 +75,14 @@ void SensorPreprocessingComponent::synced_data(
     clean_points = core_.downsample_points(clean_points);
     const auto cloud_split = core_.split_ground_points(clean_points);
     const auto curve_split = core_.split_curve_points(clean_points);
+    const auto group_boxes = core_.find_group_boxes(cloud_split.obstacle_points);
     imu_out_->publish(clean_imu);
     points_out_->publish(clean_points);
     ground_out_->publish(cloud_split.ground_points);
     obstacle_out_->publish(cloud_split.obstacle_points);
     edge_out_->publish(curve_split.edge_points);
     flat_out_->publish(curve_split.flat_points);
+    group_out_->publish(group_boxes);
   } catch (const std::runtime_error & problem) {
     RCLCPP_WARN(get_logger(), "%s", problem.what());
   }
@@ -94,6 +99,7 @@ void SensorPreprocessingComponent::load_settings()
   const int neighbor_size = declare_parameter<int>("neighbor_size", 5);
   const double edge_score_limit = declare_parameter<double>("edge_score_limit", 0.05);
   const double flat_score_limit = declare_parameter<double>("flat_score_limit", 0.005);
+  const double group_gap = declare_parameter<double>("group_gap", 0.5);
   imu_frame_ = declare_parameter<std::string>("imu_frame", "imu_link");
   lidar_frame_ = declare_parameter<std::string>("lidar_frame", "lidar_link");
 
@@ -106,6 +112,7 @@ void SensorPreprocessingComponent::load_settings()
     static_cast<std::size_t>(std::max(neighbor_size, 0)),
     edge_score_limit,
     flat_score_limit);
+  core_.set_group_gap(group_gap);
 }
 
 bool SensorPreprocessingComponent::read_frame_link(

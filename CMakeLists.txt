@@ -17,6 +17,7 @@ find_package(message_filters REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(vision_msgs REQUIRED)
 
 include_directories(include)
 
@@ -27,6 +28,7 @@ add_library(sensor_preprocessing_core SHARED
 ament_target_dependencies(sensor_preprocessing_core
   geometry_msgs
   sensor_msgs
+  vision_msgs
 )
 
 add_library(sensor_preprocessing_component SHARED
@@ -45,6 +47,7 @@ ament_target_dependencies(sensor_preprocessing_component
   geometry_msgs
   tf2
   tf2_ros
+  vision_msgs
 )
 
 rclcpp_components_register_nodes(sensor_preprocessing_component

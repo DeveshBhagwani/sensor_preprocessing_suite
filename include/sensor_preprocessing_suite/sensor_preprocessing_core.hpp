@@ -11,6 +11,7 @@
 #include "builtin_interfaces/msg/time.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
+#include "vision_msgs/msg/bounding_box3_d_array.hpp"
 
 namespace sensor_preprocessing_suite
 {
@@ -29,6 +30,7 @@ public:
     std::size_t neighbor_size,
     double edge_score_limit,
     double flat_score_limit);
+  void set_group_gap(double group_gap);
 
   struct split_cloud
   {
@@ -67,6 +69,9 @@ public:
     const sensor_msgs::msg::PointCloud2 & laser_points) const;
 
   curve_cloud split_curve_points(
+    const sensor_msgs::msg::PointCloud2 & laser_points) const;
+
+  vision_msgs::msg::BoundingBox3DArray find_group_boxes(
     const sensor_msgs::msg::PointCloud2 & laser_points) const;
 
 private:
@@ -150,6 +155,10 @@ private:
     const std::vector<simple_point> & point_list,
     std::size_t point_number) const;
 
+  double point_gap(
+    const simple_point & first_point,
+    const simple_point & second_point) const;
+
   bool point_is_clean(const simple_point & one_point) const;
 
   double time_limit_;
@@ -161,6 +170,7 @@ private:
   std::size_t neighbor_size_;
   double edge_score_limit_;
   double flat_score_limit_;
+  double group_gap_;
 };
 
 }
