@@ -60,6 +60,11 @@ install(
 )
 
 install(
+  DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
+install(
   TARGETS
     sensor_preprocessing_core
     sensor_preprocessing_component

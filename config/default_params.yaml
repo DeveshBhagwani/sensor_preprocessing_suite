@@ -1,0 +1,14 @@
+sensor_preprocessing_component:
+  ros__parameters:
+    time_limit: 0.02
+    near_limit: 0.1
+    far_limit: 200.0
+    box_size: 0.5
+    floor_height: 0.0
+    scan_time: 0.1
+    neighbor_size: 5
+    edge_score_limit: 0.05
+    flat_score_limit: 0.005
+    group_gap: 0.5
+    imu_frame: imu_link
+    lidar_frame: lidar_link
